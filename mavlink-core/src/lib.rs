@@ -44,7 +44,7 @@ use crc_any::CRCu16;
 pub mod bytes;
 pub mod bytes_mut;
 #[cfg(feature = "std")]
-mod connection;
+pub mod connection;
 pub mod error;
 #[cfg(feature = "std")]
 pub use self::connection::{connect, MavConnection};
