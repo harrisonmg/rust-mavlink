@@ -522,7 +522,11 @@ impl MAVLinkV2MessageRaw {
             M::extra_crc(self.message_id()),
         );
         if got != exp {
-            log::error!("Bad checksum, exp: {exp}, got: {got}");
+            log::error!("Bad checksum, exp: 0x{exp:X}, got: 0x{got:X}");
+            log::error!(
+                "{:X?}",
+                &self.0[1..(1 + Self::HEADER_SIZE + payload_length)]
+            );
         }
         got == exp
     }
