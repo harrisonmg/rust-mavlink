@@ -516,11 +516,15 @@ impl MAVLinkV2MessageRaw {
     #[inline]
     pub fn has_valid_crc<M: Message>(&self) -> bool {
         let payload_length: usize = self.payload_length().into();
-        self.checksum()
-            == calculate_crc(
-                &self.0[1..(1 + Self::HEADER_SIZE + payload_length)],
-                M::extra_crc(self.message_id()),
-            )
+        let got = self.checksum();
+        let exp = calculate_crc(
+            &self.0[1..(1 + Self::HEADER_SIZE + payload_length)],
+            M::extra_crc(self.message_id()),
+        );
+        if got != exp {
+            log::error!("Bad checksum, exp: {exp}, got: {got}");
+        }
+        got == exp
     }
 
     pub fn raw_bytes(&self) -> &[u8] {
