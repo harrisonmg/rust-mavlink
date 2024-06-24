@@ -9,7 +9,7 @@ mod tcp;
 mod udp;
 
 #[cfg(feature = "direct-serial")]
-mod direct_serial;
+pub mod direct_serial;
 
 mod file;
 
@@ -47,6 +47,13 @@ pub trait MavConnection<M: Message> {
         let header = MavHeader::default();
         self.send(&header, data)
     }
+}
+
+pub trait TryRecv<M: Message> {
+    /// Receive a mavlink message.
+    ///
+    /// Does not block, returns an Option containing the next valid message if available.
+    fn try_recv(&self) -> Result<Option<(MavHeader, M)>, crate::error::MessageReadError>;
 }
 
 /// Connect to a MAVLink node by address string.

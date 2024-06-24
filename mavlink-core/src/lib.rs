@@ -47,7 +47,7 @@ pub mod bytes_mut;
 mod connection;
 pub mod error;
 #[cfg(feature = "std")]
-pub use self::connection::{connect, MavConnection};
+pub use self::connection::{connect, MavConnection, TryRecv};
 
 #[cfg(any(feature = "embedded", feature = "embedded-hal-02"))]
 pub mod embedded;
@@ -221,6 +221,17 @@ pub fn read_versioned_msg<M: Message, R: Read>(
     match version {
         MavlinkVersion::V2 => read_v2_msg(r),
         MavlinkVersion::V1 => read_v1_msg(r),
+    }
+}
+
+pub fn try_read_versioned_msg<M: Message, R: Read>(
+    r: &mut PeekReader<R>,
+    version: MavlinkVersion,
+    bytes_available: usize,
+) -> Result<Option<(MavHeader, M)>, error::MessageReadError> {
+    match version {
+        MavlinkVersion::V2 => try_read_v2_msg(r, bytes_available),
+        MavlinkVersion::V1 => unimplemented!(),
     }
 }
 
@@ -691,6 +702,53 @@ pub fn read_v2_raw_message<M: Message, R: Read>(
     }
 }
 
+/// Return a raw buffer with the mavlink message if enough bytes are available.
+/// V2 maximum size is 280 bytes: `<https://mavlink.io/en/guide/serialization.html>`
+pub fn try_read_v2_raw_message<M: Message, R: Read>(
+    reader: &mut PeekReader<R>,
+    bytes_available: usize,
+) -> Result<Option<MAVLinkV2MessageRaw>, error::MessageReadError> {
+    // include bytes we've buffered in the total available bytes
+    let bytes_available = bytes_available + reader.bytes_buffered();
+
+    // need to have at least the magic byte and header available
+    for _ in MAVLinkV2MessageRaw::HEADER_SIZE..bytes_available {
+        // look for the magic start byte
+        if reader.peek_exact(1)?[0] == MAV_STX_V2 {
+            // construct the header
+            let mut message = MAVLinkV2MessageRaw::new();
+            let header = &reader.peek_exact(MAVLinkV2MessageRaw::HEADER_SIZE + 1)?;
+            message.mut_header().copy_from_slice(header);
+
+            // check if we have enough data available
+            let packet_length = message.raw_bytes().len();
+            if bytes_available < packet_length {
+                break;
+            }
+
+            // read the rest of the packet
+            let payload_and_checksum_and_sign = &reader.peek_exact(packet_length)?
+                [MAVLinkV2MessageRaw::HEADER_SIZE + 1..packet_length];
+            message
+                .mut_payload_and_checksum_and_sign()
+                .copy_from_slice(payload_and_checksum_and_sign);
+
+            if message.has_valid_crc::<M>() {
+                reader.consume(message.raw_bytes().len());
+                return Ok(Some(message));
+            } else {
+                // if the CRC was invalid, we can also throw out this start byte
+                reader.consume(1);
+            }
+        } else {
+            // it wasn't the start byte, throw it out
+            reader.consume(1);
+        }
+    }
+
+    Ok(None)
+}
+
 /// Async read a raw buffer with the mavlink message
 /// V2 maximum size is 280 bytes: `<https://mavlink.io/en/guide/serialization.html>`
 ///
@@ -733,7 +791,7 @@ pub async fn read_v2_raw_message_async<M: Message>(
     }
 }
 
-/// Read a MAVLink v2  message from a Read stream.
+/// Read a MAVLink v2 message from a Read stream.
 pub fn read_v2_msg<M: Message, R: Read>(
     read: &mut PeekReader<R>,
 ) -> Result<(MavHeader, M), error::MessageReadError> {
@@ -751,6 +809,29 @@ pub fn read_v2_msg<M: Message, R: Read>(
             )
         })
         .map_err(|err| err.into())
+}
+
+/// Try to read a MAVLink v2 message from a Read stream if enough bytes are available.
+pub fn try_read_v2_msg<M: Message, R: Read>(
+    read: &mut PeekReader<R>,
+    bytes_available: usize,
+) -> Result<Option<(MavHeader, M)>, error::MessageReadError> {
+    let maybe_message = try_read_v2_raw_message::<M, _>(read, bytes_available)?;
+
+    match maybe_message {
+        Some(message) => {
+            let parsed = M::parse(MavlinkVersion::V2, message.message_id(), message.payload())?;
+            Ok(Some((
+                MavHeader {
+                    sequence: message.sequence(),
+                    system_id: message.system_id(),
+                    component_id: message.component_id(),
+                },
+                parsed,
+            )))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Async read a MAVLink v2  message from a Read stream.
