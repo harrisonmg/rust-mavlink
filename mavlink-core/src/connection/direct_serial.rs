@@ -1,7 +1,9 @@
-use crate::connection::MavConnection;
+use crate::connection::{MavConnection, TryRecv};
 use crate::peek_reader::PeekReader;
-use crate::{read_versioned_msg, write_versioned_msg, MavHeader, MavlinkVersion, Message};
-use core::time::Duration;
+use crate::{
+    error, read_versioned_msg, try_read_versioned_msg, write_versioned_msg, MavHeader,
+    MavlinkVersion, Message,
+};
 use std::io;
 use std::sync::Mutex;
 
@@ -56,7 +58,7 @@ impl<M: Message> MavConnection<M> for SerialConnection {
     fn recv(&self) -> Result<(MavHeader, M), MessageReadError> {
         let mut reader = self.reader.lock().unwrap();
         loop {
-            match read_versioned_msg(&mut *reader, self.protocol_version) {
+            match read_versioned_msg(&mut reader, self.protocol_version) {
                 ok @ Ok(..) => {
                     return ok;
                 }
@@ -91,5 +93,15 @@ impl<M: Message> MavConnection<M> for SerialConnection {
 
     fn get_protocol_version(&self) -> MavlinkVersion {
         self.protocol_version
+    }
+}
+
+impl<M: Message> TryRecv<M> for SerialConnection {
+    fn try_recv(&self) -> Result<Option<(MavHeader, M)>, error::MessageReadError> {
+        let mut reader = self.reader.lock().unwrap();
+        let bytes_availble = reader.reader_ref().bytes_to_read().map_err(|err| {
+            io::Error::new(io::ErrorKind::Other, format!("serialport error: {err}"))
+        })? as usize;
+        try_read_versioned_msg(&mut reader, self.protocol_version, bytes_availble)
     }
 }
